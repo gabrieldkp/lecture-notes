@@ -1,5 +1,5 @@
 // 오프라인에서도 앱이 열리도록 파일을 저장해 두는 서비스 워커
-const CACHE = 'lecture-notes-v5';
+const CACHE = 'lecture-notes-v6';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/lecture.js', './js/ink.js', './js/recorder.js', './js/player.js',
@@ -23,9 +23,9 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin === location.origin) {
-    // 앱 파일: 인터넷이 되면 최신 버전, 안 되면 저장본
+    // 앱 파일: 인터넷이 되면 항상 최신 버전(브라우저 캐시도 건너뜀), 안 되면 저장본
     e.respondWith(
-      fetch(req).then((res) => {
+      fetch(req, { cache: 'no-cache' }).then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(req, copy));
         return res;

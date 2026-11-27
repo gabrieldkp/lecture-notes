@@ -1,5 +1,5 @@
 // 앱 시작점: 강의 목록 화면과 화면 전환
-import { $, h, fmtDate, fmtTime, uid, toast } from './util.js';
+import { $, h, fmtDate, fmtTime, uid, toast, APP_VERSION } from './util.js';
 import { listLectures, putLecture, deleteLecture, requestPersist } from './db.js';
 import { openLecture } from './lecture.js';
 
@@ -39,7 +39,7 @@ async function renderList() {
 
   app.replaceChildren(
     h('div', { class: 'list-page' },
-      h('header', { class: 'list-header' }, h('h1', {}, '강의노트')),
+      h('header', { class: 'list-header' }, h('h1', {}, '강의노트'), h('span', { class: 'version' }, `v${APP_VERSION}`)),
       h('div', { class: 'new-row' }, input, h('button', { class: 'btn primary', onClick: create }, '+ 새 강의')),
       !standalone && h('p', { class: 'hint' },
         '팁: Safari 공유 버튼 → "홈 화면에 추가"로 설치하면 앱처럼 열리고, 저장한 노트가 지워질 위험도 줄어요.'),

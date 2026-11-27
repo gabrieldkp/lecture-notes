@@ -33,7 +33,7 @@ export async function openLecture(root, id) {
   const lec = await getLecture(id);
   if (!lec) throw new Error('강의를 찾을 수 없어요');
 
-  const state = { page: lec.lastPage || 1, pdf: null, tool: 'pen', color: COLORS[0], finger: false, follow: true, tab: 'notes', liveTx: liveTxDefault() };
+  const state = { page: lec.lastPage || 1, pdf: null, tool: 'pen', color: COLORS[0], finger: false, follow: true, liveTx: liveTxDefault() };
   const save = debounce(() => putLecture(lec), 400);
   let base = 0; // 이번 녹음 세션이 강의 타임라인에서 시작하는 위치 (이어서 녹음 시 앞 녹음 길이)
   const rec = new Recorder({
@@ -101,7 +101,9 @@ export async function openLecture(root, id) {
   composer.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); addNote(); }
   });
-  const notesView = h('div', { class: 'panel-view' }, notesList,
+  const notesView = h('section', { class: 'panel-view notes-view' },
+    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, '노트')),
+    notesList,
     h('div', { class: 'composer-row' }, composer, h('button', { class: 'btn primary', onClick: addNote }, '추가')));
 
   // 전사
@@ -110,14 +112,14 @@ export async function openLecture(root, id) {
   const liveToggle = h('label', { class: 'toggle' },
     h('input', { type: 'checkbox', checked: state.liveTx, disabled: !Transcriber.supported(), onChange: (e) => setLiveTx(e.target.checked, true) }),
     ' 실시간 자막');
-  const txView = h('div', { class: 'panel-view' },
-    h('div', { class: 'tx-head' }, liveToggle, h('button', { class: 'btn ghost', onClick: copyForSummary }, '요약용 전체 복사')),
+  const txView = h('section', { class: 'panel-view tx-view' },
+    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, '전사'), liveToggle,
+      h('span', { class: 'grow' }), h('button', { class: 'btn ghost small', onClick: copyForSummary }, '요약용 복사')),
     !Transcriber.supported() && h('p', { class: 'hint' }, '이 브라우저는 실시간 자막을 지원하지 않아요. 녹음은 그대로 돼요.'),
-    IS_IPAD && Transcriber.supported() && h('p', { class: 'hint' }, '아이패드에서 실시간 자막을 켜면 녹음이 무음이 될 수 있어요. 켰다면 녹음 중 위쪽 초록 물결이 움직이는지 꼭 확인하세요.'),
     txList);
 
-  const tabBtns = { notes: h('button', { class: 'tab', onClick: () => setTab('notes') }, '노트'), tx: h('button', { class: 'tab', onClick: () => setTab('tx') }, '전사') };
-  const panel = h('aside', { class: 'panel' }, h('div', { class: 'tabs' }, tabBtns.notes, tabBtns.tx), notesView, txView);
+  // 오른쪽(세로 모드에선 아래) 패널: 위 절반 전사, 아래 절반 노트
+  const panel = h('aside', { class: 'panel' }, txView, notesView);
 
   const fileInput = h('input', { type: 'file', accept: 'application/pdf,.pdf', hidden: true, onChange: (e) => importPdf(e.target.files[0]) });
 
@@ -378,7 +380,7 @@ export async function openLecture(root, id) {
       txList.children[activeTxIdx]?.classList.remove('active');
       activeTxIdx = idx;
       const li = txList.children[idx];
-      if (li) { li.classList.add('active'); if (state.tab === 'tx') li.scrollIntoView({ block: 'nearest' }); }
+      if (li) { li.classList.add('active'); li.scrollIntoView({ block: 'nearest' }); }
     }
   }
 
@@ -453,14 +455,6 @@ export async function openLecture(root, id) {
     }
   }
 
-  function setTab(t) {
-    state.tab = t;
-    tabBtns.notes.classList.toggle('active', t === 'notes');
-    tabBtns.tx.classList.toggle('active', t === 'tx');
-    notesView.hidden = t !== 'notes';
-    txView.hidden = t !== 'tx';
-  }
-
   // ---------- 나가기 ----------
   function goBack() {
     if (rec.state !== 'idle' && !confirm('녹음을 끝내고 목록으로 갈까요? 지금까지 녹음은 저장돼요.')) return;
@@ -487,7 +481,7 @@ export async function openLecture(root, id) {
   }
   if (lec.hasPdf) await loadPdf();
   await loadPlayer();
-  renderToolbar(); renderRecArea(); renderNotes(); renderTranscript(); setTab('notes'); updateNav();
+  renderToolbar(); renderRecArea(); renderNotes(); renderTranscript(); updateNav();
   requestAnimationFrame(() => renderPage());
 
   return async () => {

@@ -1,3 +1,6 @@
+// 화면에 보이는 앱 버전 (아이패드가 최신 버전을 쓰는지 확인용)
+export const APP_VERSION = '0.6';
+
 // 작은 DOM/시간 도우미 함수 모음
 
 export const $ = (sel, root = document) => root.querySelector(sel);
