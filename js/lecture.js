@@ -468,7 +468,8 @@ export async function openLecture(root, id) {
   }
 
   const onVis = () => {
-    if (document.visibilityState === 'hidden') save.flush();
+    // 다른 앱이나 홈 화면으로 나가면 재생은 멈춤 (녹음은 계속)
+    if (document.visibilityState === 'hidden') { save.flush(); player?.pause(); }
     else rec.relock();
   };
   document.addEventListener('visibilitychange', onVis);

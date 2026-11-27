@@ -90,6 +90,7 @@ export class SegPlayer {
   destroy() {
     this.audio.pause();
     this.audio.removeAttribute('src');
+    this.audio.load(); // Safari에서 확실히 멈추도록
     this.urls.forEach((u) => URL.revokeObjectURL(u));
   }
 }
