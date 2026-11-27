@@ -30,7 +30,7 @@ js/lecture.js         강의 화면 (슬라이드, 노트, 전사, 녹음 연결
 js/pages.js            위아래로 이어지는 슬라이드 화면
 js/ink.js             필기 레이어
 js/player.js           여러 녹음 구간 이어서 재생
-js/art.js              캐릭터 그림 (까망이, 알렉스, 발바닥)
+js/art.js              캐릭터 그림 (까망이, 알렉스(icons/alex.jpg 사진), 발바닥)
 js/recorder.js        녹음, 실시간 자막
 js/db.js              아이패드 안 저장소 (IndexedDB)
 sw.js                 오프라인 동작

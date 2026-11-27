@@ -1,10 +1,10 @@
 // 오프라인에서도 앱이 열리도록 파일을 저장해 두는 서비스 워커
-const CACHE = 'lecture-notes-v13';
+const CACHE = 'lecture-notes-v14';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/db.js', './js/util.js', './js/lecture.js', './js/ink.js', './js/recorder.js', './js/player.js', './js/pages.js', './js/art.js',
   './vendor/pdfjs/pdf.min.mjs', './vendor/pdfjs/pdf.worker.min.mjs',
-  './icons/icon.svg', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
+  './icons/icon.svg', './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png', './icons/alex.jpg',
 ];
 
 self.addEventListener('install', (e) => {
