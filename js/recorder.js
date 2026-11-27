@@ -52,11 +52,14 @@ export class Recorder {
 
   #finish(seg, endT) {
     return new Promise((resolve) => {
-      seg.mr.onstop = () => resolve({
+      const done = () => resolve({
         start: seg.start,
         duration: Math.max(0, endT - seg.start),
         blob: new Blob(seg.chunks, { type: seg.mr.mimeType || this.mime || 'audio/mp4' }),
       });
+      // 아이패드 Safari는 두 번째 녹음부터 데이터가 늦게 오는 경우가 있어 잠깐 더 기다림
+      seg.mr.onstop = () => { if (seg.chunks.length) done(); else setTimeout(done, 600); };
+      try { seg.mr.requestData(); } catch { /* 무시 */ }
       try { seg.mr.stop(); } catch { resolve({ start: seg.start, duration: 0, blob: new Blob([]) }); }
     });
   }

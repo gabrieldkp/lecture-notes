@@ -51,7 +51,7 @@ export async function openLecture(root, id) {
     onLevel: (v, buf) => onLevel(v, buf),
   });
   // 저장된 녹음 구간이 실제로 소리가 있는지 검사 (무음이면 바로 알려줌)
-  let warnedSilent = false, warnedNoMic = false;
+  let warnedSilent = false, warnedNoMic = false, segsBefore = 0;
   async function checkSilent(blob) {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -309,6 +309,7 @@ export async function openLecture(root, id) {
     player?.destroy();
     player = null;
     base = totalDuration();
+    segsBefore = lec.segments.length;
     try { await rec.start(); } catch (err) {
       console.error(err);
       toast('마이크를 쓸 수 없어요. 설정 → Safari → 마이크에서 허용해 주세요.', 4000);
@@ -343,7 +344,10 @@ export async function openLecture(root, id) {
     await finishRecording();
     await loadPlayer();
     renderRecArea();
-    toast('녹음을 저장했어요');
+    const added = lec.segments.length - segsBefore;
+    toast(added > 0
+      ? `녹음을 저장했어요 (총 ${fmtTime(totalDuration())})`
+      : '이번 녹음이 저장되지 않았어요. 앱을 완전히 껐다 켠 뒤 "이어서 녹음"을 다시 해주세요.', 6000);
   }
 
   async function loadPlayer() {
