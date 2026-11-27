@@ -44,7 +44,7 @@ async function renderList() {
         h('div', { class: 'hero-pets' }, art('cat'), art('dog')),
         h('div', {},
           h('h1', {}, '강의노트', h('span', { class: 'version' }, `v${APP_VERSION}`)),
-          h('p', {}, '까망이랑 콩이랑 같이 수업 듣기'))),
+          h('p', {}, '까망이랑 알렉스랑 같이 수업 듣기'))),
       h('div', { class: 'new-row' }, input, h('button', { class: 'btn primary', onClick: create }, art('paw'), '새 강의')),
       !standalone && h('p', { class: 'hint' },
         '팁: Safari 공유 버튼 → "홈 화면에 추가"로 설치하면 앱처럼 열리고, 저장한 노트가 지워질 위험도 줄어요.'),

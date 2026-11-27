@@ -46,6 +46,7 @@ export async function openLecture(root, id) {
       await save.flush();
     },
     onLevel: (v, buf) => onLevel(v, buf),
+    onBroken: () => onRecBroken(),
   });
   // 저장된 녹음 구간이 실제로 소리가 있는지 검사 (무음이면 바로 알려줌)
   let warnedSilent = false, warnedNoMic = false, segsBefore = 0;
@@ -322,7 +323,48 @@ export async function openLecture(root, id) {
   }
 
   async function pauseRec() { tx.stop(); await rec.pause(); renderRecArea(); }
-  function resumeRec() { rec.resume(); if (state.liveTx) tx.start(); renderRecArea(); }
+  async function resumeRec() {
+    try { await rec.resume(); } catch (err) {
+      console.error(err);
+      toast('마이크를 다시 열지 못했어요. 앱을 껐다 켠 뒤 "이어서 녹음"을 눌러주세요.', 6000);
+      return;
+    }
+    lec.events.push({ t: now(), page: state.page });
+    if (state.liveTx) tx.start();
+    renderRecArea();
+  }
+
+  // ---------- 녹음 끊김 대비 ----------
+  // 화면 잠금, 다른 앱 전환, 전화 등으로 아이패드가 녹음을 멈추면 감지해서 다시 이어 녹음
+  let hiddenAt = null, needRecover = false, recovering = false;
+  function onRecBroken() {
+    if (document.visibilityState === 'hidden') { needRecover = true; return; } // 화면에 돌아오면 처리
+    recoverRec();
+  }
+  async function recoverRec() {
+    if (recovering || rec.state !== 'rec') return;
+    recovering = true;
+    needRecover = false;
+    tx.stop();
+    const away = hiddenAt ? Math.round((performance.now() - hiddenAt) / 1000) : 0;
+    const ok = await rec.recover();
+    recovering = false;
+    if (ok) {
+      lec.events.push({ t: now(), page: state.page });
+      save();
+      if (state.liveTx) tx.start();
+      toast(away > 2
+        ? `화면을 떠나 있던 약 ${away}초 동안 녹음이 끊겼어요. 지금부터 다시 이어서 녹음해요.`
+        : '녹음이 잠깐 끊겨서 다시 이어서 녹음하고 있어요.', 7000);
+    } else {
+      toast('녹음이 멈췄어요. "계속"을 눌러 다시 녹음해 주세요.', 8000);
+    }
+    renderRecArea();
+  }
+  // 화면에 있는 동안 3초마다 녹음 상태 점검
+  const healthTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && rec.state === 'rec' && !recovering && !rec.healthy()) recoverRec();
+  }, 3000);
 
   async function finishRecording() {
     clearInterval(tick);
@@ -468,8 +510,11 @@ export async function openLecture(root, id) {
 
   const onVis = () => {
     // 다른 앱이나 홈 화면으로 나가면 재생은 멈춤 (녹음은 계속)
-    if (document.visibilityState === 'hidden') { save.flush(); player?.pause(); }
+    if (document.visibilityState === 'hidden') { hiddenAt = performance.now(); save.flush(); player?.pause(); return; }
+    // 돌아왔을 때 녹음이 끊겨 있으면 살리기
+    if (rec.state === 'rec' && (needRecover || !rec.healthy())) recoverRec();
     else rec.relock();
+    hiddenAt = null;
   };
   document.addEventListener('visibilitychange', onVis);
 
@@ -494,6 +539,7 @@ export async function openLecture(root, id) {
     pv.destroy();
     clearTimeout(pageEventTimer);
     document.removeEventListener('visibilitychange', onVis);
+    clearInterval(healthTimer);
     if (rec.state !== 'idle') await finishRecording();
     await save.flush();
     player?.destroy();

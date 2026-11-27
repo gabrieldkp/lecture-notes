@@ -7,12 +7,13 @@
 const ROTATE_MS = 5 * 60 * 1000;
 
 export class Recorder {
-  constructor({ onSegment, onLevel } = {}) {
+  constructor({ onSegment, onLevel, onBroken } = {}) {
     this.state = 'idle';
     this.acc = 0;
     this.since = 0;
     this.onSegment = onSegment; // async ({start, duration, blob}) — start는 이번 녹음 세션 기준 초
     this.onLevel = onLevel;     // (0~1 소리 크기, 파형 데이터)
+    this.onBroken = onBroken;   // () 녹음이 끊겼을 때 (화면 잠금, 다른 앱, 전화 등)
   }
 
   async start() {
@@ -22,6 +23,7 @@ export class Recorder {
     try { const AC = window.AudioContext || window.webkitAudioContext; this.ac = new AC(); } catch { this.ac = null; }
     // 아이패드에서 세부 옵션을 주면 무음으로 녹음되는 경우가 있어 기본 설정 사용
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.#watch();
     const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
     this.mime = types.find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
     this.acc = 0;
@@ -42,10 +44,61 @@ export class Recorder {
     this.rotateTimer = setInterval(() => this.#rotate(), window.__ROTATE_MS || ROTATE_MS);
   }
 
+  // 마이크가 끊기는 신호를 감시
+  #watch() {
+    for (const tr of this.stream.getAudioTracks()) {
+      tr.addEventListener('ended', () => this.#broke());
+    }
+  }
+
+  #broke() {
+    if (this.state === 'rec' && !this.recovering) this.onBroken?.();
+  }
+
+  // 지금 녹음이 정상인지 (마이크 연결, 녹음기 동작)
+  healthy() {
+    if (this.state !== 'rec') return true;
+    const tr = this.stream?.getAudioTracks()[0];
+    return !!tr && tr.readyState === 'live' && this.cur?.mr.state === 'recording';
+  }
+
+  // 끊긴 녹음 살리기: 지금까지 녹음된 부분을 저장하고, 마이크를 다시 열어 같은 타임라인에 이어서 녹음
+  async recover() {
+    if (this.state !== 'rec' || this.recovering) return false;
+    this.recovering = true;
+    try {
+      const t = this.elapsed();
+      const old = this.cur;
+      this.cur = null;
+      if (old) await this.onSegment?.(await this.#finish(old, t));
+      this.stream?.getTracks().forEach((tr) => tr.stop());
+      this.#stopMeter();
+      try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch { /* 무시 */ }
+      try { const AC = window.AudioContext || window.webkitAudioContext; this.ac = new AC(); } catch { this.ac = null; }
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.#watch();
+      this.#newSeg();
+      this.#armRotate();
+      this.#startMeter();
+      await this.#lockScreen();
+      return true;
+    } catch (err) {
+      console.error(err);
+      // 다시 못 열면 일시정지 상태로 두고 사용자가 '계속'을 누르게 함
+      this.acc = this.elapsed();
+      this.state = 'paused';
+      clearInterval(this.rotateTimer);
+      return false;
+    } finally {
+      this.recovering = false;
+    }
+  }
+
   #newSeg() {
     const mr = new MediaRecorder(this.stream, this.mime ? { mimeType: this.mime } : undefined);
     const seg = { mr, start: this.elapsed(), chunks: [] };
     mr.ondataavailable = (e) => { if (e.data && e.data.size) seg.chunks.push(e.data); };
+    mr.onerror = () => this.#broke();
     mr.start();
     this.cur = seg;
   }
@@ -59,8 +112,9 @@ export class Recorder {
       });
       // 아이패드 Safari는 두 번째 녹음부터 데이터가 늦게 오는 경우가 있어 잠깐 더 기다림
       seg.mr.onstop = () => { if (seg.chunks.length) done(); else setTimeout(done, 600); };
+      if (seg.mr.state === 'inactive') { setTimeout(done, 300); return; } // 이미 멈춘 녹음기: 모인 데이터만 저장
       try { seg.mr.requestData(); } catch { /* 무시 */ }
-      try { seg.mr.stop(); } catch { resolve({ start: seg.start, duration: 0, blob: new Blob([]) }); }
+      try { seg.mr.stop(); } catch { setTimeout(done, 300); }
     });
   }
 
@@ -83,8 +137,17 @@ export class Recorder {
     await this.onSegment?.(await this.#finish(seg, this.acc));
   }
 
-  resume() {
+  async resume() {
     if (this.state !== 'paused') return;
+    const tr = this.stream?.getAudioTracks()[0];
+    if (!tr || tr.readyState !== 'live') {
+      // 마이크가 닫혀 있으면 다시 열기
+      this.#stopMeter();
+      try { const AC = window.AudioContext || window.webkitAudioContext; this.ac = new AC(); } catch { this.ac = null; }
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.#watch();
+      this.#startMeter();
+    }
     this.since = performance.now();
     this.state = 'rec';
     this.#newSeg();

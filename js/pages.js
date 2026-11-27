@@ -21,13 +21,6 @@ export class PageView {
     this.lastInkPage = null;
     this.programmatic = 0;
 
-    this.io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        const n = +e.target.dataset.page;
-        if (e.isIntersecting) this.#activate(n); else this.#deactivate(n);
-      }
-    }, { root: this.el, rootMargin: '120% 0px' });
-
     let raf = 0;
     this.el.addEventListener('scroll', () => {
       if (raf) return;
@@ -55,20 +48,18 @@ export class PageView {
     } else {
       for (let i = 0; i < (this.o.lec.blankPages || 1); i++) sizes.push(BLANK);
     }
-    this.io.disconnect();
     for (const n of [...this.active]) this.#deactivate(n);
     this.inks.clear();
     this.sizes = sizes;
     this.sheets = sizes.map((_, i) => {
       const n = i + 1;
-      const pdfC = h('canvas', { class: 'pdf-canvas' });
-      const inkC = h('canvas', { class: 'ink-canvas' });
+      const pdfC = h('canvas', { class: 'pdf-canvas', width: 0, height: 0 });
+      const inkC = h('canvas', { class: 'ink-canvas', width: 0, height: 0 });
       return h('div', { class: 'sheet', 'data-page': n }, pdfC, inkC, h('span', { class: 'page-no' }, n));
     });
     this.el.replaceChildren(...this.sheets);
     this.current = 0;
     this.layout();
-    this.sheets.forEach((s) => this.io.observe(s));
   }
 
   layout() {
@@ -81,7 +72,7 @@ export class PageView {
       s.style.height = `${Math.round((W * sz.h) / sz.w)}px`;
     });
     // 크기가 바뀌면 보이는 페이지 다시 그리기
-    for (const n of [...this.active]) { this.#deactivate(n); this.#activate(n); }
+    for (const n of [...this.active]) this.#deactivate(n);
     this.#onScroll();
   }
 
@@ -139,8 +130,20 @@ export class PageView {
     for (const c of sheet.querySelectorAll('canvas')) { c.width = 0; c.height = 0; }
   }
 
+  // 화면 근처(위아래로 화면 1.2개 높이)에 있는 페이지만 그리고 나머지는 지움
+  #updateVisible() {
+    const vh = this.el.clientHeight || window.innerHeight;
+    const top = this.el.scrollTop - vh * 1.2, bottom = this.el.scrollTop + vh * 2.2;
+    for (const s of this.sheets) {
+      const n = +s.dataset.page;
+      const y = s.offsetTop, near = y + s.offsetHeight >= top && y <= bottom;
+      if (near) this.#activate(n); else this.#deactivate(n);
+    }
+  }
+
   #onScroll() {
     if (!this.sheets.length) return;
+    this.#updateVisible();
     const line = this.el.scrollTop + this.el.clientHeight * 0.4;
     let n = 1;
     for (const s of this.sheets) { if (s.offsetTop <= line) n = +s.dataset.page; else break; }
@@ -169,7 +172,6 @@ export class PageView {
   setFinger(on) { this.el.classList.toggle('finger-draw', on); }
 
   destroy() {
-    this.io.disconnect();
     this.ro.disconnect();
     for (const n of [...this.active]) this.#deactivate(n);
   }
