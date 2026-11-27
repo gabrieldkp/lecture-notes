@@ -220,6 +220,7 @@ export async function openLecture(root, id) {
       );
     } else if (audio) {
       recArea.replaceChildren(audio,
+        h('button', { class: 'btn', onClick: exportAudio }, '녹음 파일 내보내기'),
         h('label', { class: 'toggle' },
           h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; } }), ' 슬라이드 따라가기'));
     } else {
@@ -274,6 +275,22 @@ export async function openLecture(root, id) {
     audioUrl = URL.createObjectURL(blob);
     audio = h('audio', { controls: true, preload: 'metadata', src: audioUrl });
     audio.addEventListener('timeupdate', onPlayback);
+  }
+
+  // 원본 녹음을 다른 앱(클로바노트 등)으로 보내 더 정확하게 다시 전사할 수 있게
+  async function exportAudio() {
+    const blob = await getFile(`${lec.id}:audio`);
+    if (!blob) return;
+    const ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : 'webm';
+    const name = `${(lec.title || '강의').replace(/[\\/:*?"<>|]/g, '_')}.${ext}`;
+    const file = new File([blob], name, { type: blob.type || 'audio/mp4' });
+    if (navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: name }); } catch { /* 취소 */ }
+      return;
+    }
+    const a = h('a', { href: URL.createObjectURL(file), download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   }
 
   function onPlayback() {
