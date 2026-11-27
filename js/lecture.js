@@ -6,12 +6,9 @@ import { art } from './art.js';
 import { Recorder, Transcriber } from './recorder.js';
 import { SegPlayer } from './player.js';
 
-// 아이패드에서는 실시간 자막이 마이크를 가져가 녹음이 무음이 되는 경우가 있어 기본으로 끔
-const IS_IPAD = /iPad|iPhone/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+// 실시간 자막: 기본으로 켜고, 직접 끈 경우에만 꺼진 상태를 기억
 function liveTxDefault() {
-  const saved = localStorage.getItem('liveTx');
-  if (saved != null) return saved === '1' && Transcriber.supported();
-  return Transcriber.supported() && !IS_IPAD;
+  return Transcriber.supported() && localStorage.getItem('liveTxOff') !== '1';
 }
 
 // PDF 뷰어(pdf.js 4.10.38)는 vendor 폴더에 함께 넣어 둬서 인터넷 없이도 동작
@@ -245,23 +242,18 @@ export async function openLecture(root, id) {
   function setLiveTx(on, remember) {
     state.liveTx = on;
     liveToggle.querySelector('input').checked = on;
-    if (remember) localStorage.setItem('liveTx', on ? '1' : '0');
+    if (remember) { if (on) localStorage.removeItem('liveTxOff'); else localStorage.setItem('liveTxOff', '1'); }
     if (rec.state === 'rec') (on ? tx.start() : tx.stop());
   }
 
   function onLevel(v, buf) {
     drawWave(v, buf);
-    // 자막을 켠 상태에서 마이크 소리가 8초 넘게 0이면: 자막이 마이크를 가져간 것으로 보고 자막을 끔
+    // 마이크 소리가 10초 넘게 안 들어오면 알려주기 (자막은 끄지 않음)
     if (v < 0.005) {
       silentSince ??= performance.now();
-      if (!state.liveTx && !warnedNoMic && performance.now() - silentSince > 10000) {
+      if (!warnedNoMic && performance.now() - silentSince > 10000) {
         warnedNoMic = true;
-        toast('마이크 소리가 10초 넘게 안 들어와요. 녹음을 끝내고 다시 시작해 보세요.', 6000);
-      }
-      if (state.liveTx && performance.now() - silentSince > 8000) {
-        setLiveTx(false, true);
-        silentSince = null;
-        toast('마이크 소리가 안 들어와서 실시간 자막을 껐어요. 녹음을 우선해요.', 5000);
+        toast('마이크 소리가 10초 넘게 안 들어와요. 물결이 계속 회색이면 녹음을 끝내고 다시 시작해 보세요.', 6000);
       }
     } else silentSince = null;
   }
