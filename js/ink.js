@@ -6,11 +6,10 @@ const round = (n) => Math.round(n * 10000) / 10000;
 export function createInk(canvas, opts) {
   // opts: getTool() -> {tool:'pen'|'hl'|'eraser'|'play', color, w, finger}
   //       now() -> 녹음 기준 초 (없으면 null)
-  //       onChange(), onSwipe(dir), onPick(stroke)
+  //       onChange(), onPick(stroke)
   const ctx = canvas.getContext('2d');
   let strokes = [];
   let cur = null;
-  let swipe = null;
   let replayT = null; // 재생 위치(초). 이 시각 이후에 그린 획은 흐리게 표시
   const later = (st) => replayT != null && st.t != null && st.t > replayT;
 
@@ -84,12 +83,16 @@ export function createInk(canvas, opts) {
     return changed;
   }
 
+  // 애플펜슬(또는 손가락 필기 모드)일 때만 화면 스크롤을 막고, 손가락은 스크롤에 양보
+  const blockScroll = (e) => {
+    const t = opts.getTool();
+    if (t.finger || [...e.touches].some((x) => x.touchType === 'stylus')) e.preventDefault();
+  };
+  canvas.addEventListener('touchstart', blockScroll, { passive: false });
+  canvas.addEventListener('touchmove', blockScroll, { passive: false });
+
   canvas.addEventListener('pointerdown', (e) => {
     const t = opts.getTool();
-    const canDraw = e.pointerType === 'pen' || e.pointerType === 'mouse' || t.finger;
-    if (!canDraw) { swipe = { x: e.clientX, y: e.clientY }; return; }
-    e.preventDefault();
-    canvas.setPointerCapture(e.pointerId);
     const p = pos(e);
     if (t.tool === 'play') {
       let pick = null, best = W() * 0.03;
@@ -97,6 +100,10 @@ export function createInk(canvas, opts) {
       if (pick) opts.onPick(pick);
       return;
     }
+    const canDraw = e.pointerType === 'pen' || e.pointerType === 'mouse' || t.finger;
+    if (!canDraw) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
     if (t.tool === 'eraser') { cur = { erasing: true, changed: erase(p) }; return; }
     cur = { tool: t.tool, color: t.color, w: t.w, t: opts.now(), pts: [p] };
     drawSegment(cur, 0);
@@ -113,20 +120,14 @@ export function createInk(canvas, opts) {
     if (cur.tool === 'hl') { redraw(); drawStroke(cur); }
   });
 
-  function end(e, cancelled) {
-    if (swipe) {
-      const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
-      if (!cancelled && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) opts.onSwipe(dx < 0 ? 1 : -1);
-      swipe = null;
-      return;
-    }
+  function end() {
     if (!cur) return;
     if (cur.erasing) { if (cur.changed) opts.onChange(); }
     else { strokes.push(cur); opts.onChange(); }
     cur = null;
   }
-  canvas.addEventListener('pointerup', (e) => end(e, false));
-  canvas.addEventListener('pointercancel', (e) => end(e, true));
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
 
   return {
     setStrokes(arr) { strokes = arr; redraw(); },

@@ -1,7 +1,8 @@
 // 강의 화면: 왼쪽 슬라이드(PDF) + 필기, 오른쪽 타이핑 노트 / 실시간 전사, 위쪽 녹음
 import { h, fmtTime, uid, debounce, toast } from './util.js';
 import { getLecture, putLecture, getFile, putFile } from './db.js';
-import { createInk } from './ink.js';
+import { PageView } from './pages.js';
+import { art } from './art.js';
 import { Recorder, Transcriber } from './recorder.js';
 import { SegPlayer } from './player.js';
 
@@ -79,14 +80,14 @@ export async function openLecture(root, id) {
     },
   });
   let player = null, tick = null, silentSince = null;
-  let renderToken = 0, renderTask = null, activeTxIdx = -1;
+  let activeTxIdx = -1, pageEventTimer = null;
 
   const now = () => {
     if (rec.state !== 'idle') return base + rec.elapsed();
     if (player && player.time() > 0) return player.time();
     return null;
   };
-  const pageCount = () => (state.pdf ? state.pdf.numPages : lec.blankPages || 1);
+  const pageCount = () => pv.count || 1;
 
   // ---------- 화면 요소 ----------
   const titleInput = h('input', { class: 'lec-title', value: lec.title, enterkeyhint: 'done' });
@@ -98,10 +99,19 @@ export async function openLecture(root, id) {
   const waveC = h('canvas', { class: 'wave', width: 240, height: 64, title: '마이크 소리' });
   const waveCtx = waveC.getContext('2d');
 
-  const pdfC = h('canvas', { class: 'pdf-canvas' });
-  const inkC = h('canvas', { class: 'ink-canvas' });
-  const sheet = h('div', { class: 'sheet' }, pdfC, inkC);
-  const stage = h('div', { class: 'stage' }, sheet);
+  const pv = new PageView({
+    lec,
+    getPdf: () => state.pdf,
+    getTool: () => ({ tool: state.tool, color: state.tool === 'hl' ? HIGHLIGHT : state.color, w: state.tool === 'hl' ? 20 : 2.5, finger: state.finger }),
+    now: () => now(),
+    onInkChange: () => save(),
+    onPick: (st) => { if (player) seek(st.t); else toast('녹음을 끝낸 뒤에 필기를 눌러 그때 소리를 들을 수 있어요'); },
+    onPageChange: (n) => onPageChange(n),
+    onUserScroll: () => {
+      // 재생 중에 직접 스크롤하면 "재생 따라가기"를 끔
+      if (player && !player.paused && state.follow) { state.follow = false; pv.setReplayTime(null); renderRecArea(); toast('직접 넘겨서 재생 따라가기를 껐어요'); }
+    },
+  });
 
   const toolbar = h('div', { class: 'toolbar' });
   const pageLabel = h('span', { class: 'page-label' });
@@ -110,7 +120,7 @@ export async function openLecture(root, id) {
     pageLabel,
     h('button', { class: 'btn', onClick: () => goPage(state.page + 1) }, '다음 ›'),
   );
-  const addPageBtn = h('button', { class: 'btn ghost', onClick: () => { lec.blankPages = (lec.blankPages || 1) + 1; save(); goPage(lec.blankPages); } }, '+ 빈 페이지');
+  const addPageBtn = h('button', { class: 'btn ghost', onClick: async () => { lec.blankPages = (lec.blankPages || 1) + 1; save(); await pv.build(); pv.scrollToPage(lec.blankPages); } }, '+ 빈 페이지');
   nav.append(addPageBtn);
 
   // 타이핑 노트
@@ -120,7 +130,7 @@ export async function openLecture(root, id) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); addNote(); }
   });
   const notesView = h('section', { class: 'panel-view notes-view' },
-    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, '노트')),
+    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, art('paw'), '노트')),
     notesList,
     h('div', { class: 'composer-row' }, composer, h('button', { class: 'btn primary', onClick: addNote }, '추가')));
 
@@ -131,7 +141,7 @@ export async function openLecture(root, id) {
     h('input', { type: 'checkbox', checked: state.liveTx, disabled: !Transcriber.supported(), onChange: (e) => setLiveTx(e.target.checked, true) }),
     ' 실시간 자막');
   const txView = h('section', { class: 'panel-view tx-view' },
-    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, '전사'), liveToggle,
+    h('div', { class: 'section-head' }, h('span', { class: 'section-title' }, art('paw'), '전사'), liveToggle,
       h('span', { class: 'grow' }), h('button', { class: 'btn ghost small', onClick: copyForSummary }, '요약용 복사')),
     !Transcriber.supported() && h('p', { class: 'hint' }, '이 브라우저는 실시간 자막을 지원하지 않아요. 녹음은 그대로 돼요.'),
     txList);
@@ -147,19 +157,11 @@ export async function openLecture(root, id) {
         h('button', { class: 'btn ghost', onClick: goBack }, '‹ 목록'),
         titleInput, recArea),
       h('div', { class: 'lec-main' },
-        h('section', { class: 'slides' }, toolbar, stage, nav),
+        h('section', { class: 'slides' }, toolbar, pv.el, nav),
         panel),
       fileInput,
     ),
   );
-
-  const ink = createInk(inkC, {
-    getTool: () => ({ tool: state.tool, color: state.tool === 'hl' ? HIGHLIGHT : state.color, w: state.tool === 'hl' ? 20 : 2.5, finger: state.finger }),
-    now,
-    onChange: save,
-    onSwipe: (d) => goPage(state.page + d),
-    onPick: (st) => { if (player) seek(st.t); else toast('녹음을 끝낸 뒤에 필기를 눌러 그때 소리를 들을 수 있어요'); },
-  });
 
   // ---------- 툴바 ----------
   function renderToolbar() {
@@ -172,9 +174,9 @@ export async function openLecture(root, id) {
         onClick: () => { state.color = c; state.tool = 'pen'; renderToolbar(); },
       })),
       h('span', { class: 'sep' }),
-      h('button', { class: 'btn', onClick: () => ink.undo() }, '되돌리기'),
+      h('button', { class: 'btn', onClick: () => pv.undo() }, '되돌리기'),
       h('label', { class: 'toggle' },
-        h('input', { type: 'checkbox', checked: state.finger, onChange: (e) => { state.finger = e.target.checked; } }), ' 손가락 필기'),
+        h('input', { type: 'checkbox', checked: state.finger, onChange: (e) => { state.finger = e.target.checked; pv.setFinger(state.finger); } }), ' 손가락 필기'),
       h('span', { class: 'grow' }),
       h('button', { class: 'btn', onClick: () => fileInput.click() }, lec.hasPdf ? 'PDF 바꾸기' : '슬라이드 PDF 불러오기'),
     );
@@ -186,48 +188,25 @@ export async function openLecture(root, id) {
     addPageBtn.hidden = !!state.pdf;
   }
 
-  function goPage(n, { fromPlayback = false } = {}) {
-    n = Math.min(Math.max(1, n), pageCount());
-    if (n === state.page) return;
+  // 스크롤해서 보고 있는 페이지가 바뀜
+  function onPageChange(n) {
     state.page = n;
     lec.lastPage = n;
-    if (rec.state !== 'idle') lec.events.push({ t: now(), page: n });
-    // 재생 중에 직접 넘기면 "슬라이드 따라가기"를 끔
-    if (!fromPlayback && player && !player.paused && state.follow) { state.follow = false; ink.setReplayTime(null); renderRecArea(); }
-    save();
-    renderPage();
     updateNav();
+    save();
+    // 녹음 중이면 "몇 초에 몇 페이지를 봤는지" 기록 (빠르게 훑고 지나간 페이지는 제외)
+    clearTimeout(pageEventTimer);
+    if (rec.state !== 'idle') {
+      const t = now();
+      pageEventTimer = setTimeout(() => {
+        if (state.page === n && lec.events.at(-1)?.page !== n) { lec.events.push({ t, page: n }); save(); }
+      }, 700);
+    }
   }
 
-  async function renderPage() {
-    const token = ++renderToken;
-    const maxW = stage.clientWidth - 16, maxH = stage.clientHeight - 16;
-    if (maxW <= 0 || maxH <= 0) return;
-    let page = null, vw = 1024, vh = 768;
-    if (state.pdf) {
-      page = await state.pdf.getPage(state.page);
-      if (token !== renderToken) return;
-      const v = page.getViewport({ scale: 1 });
-      vw = v.width; vh = v.height;
-    }
-    const scale = Math.min(maxW / vw, maxH / vh);
-    const cssW = Math.floor(vw * scale), cssH = Math.floor(vh * scale);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    for (const c of [pdfC, inkC]) {
-      c.style.width = `${cssW}px`; c.style.height = `${cssH}px`;
-      c.width = Math.floor(cssW * dpr); c.height = Math.floor(cssH * dpr);
-    }
-    const ctx = pdfC.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, pdfC.width, pdfC.height);
-    lec.ink[state.page] ||= [];
-    ink.setStrokes(lec.ink[state.page]);
-    if (player && state.follow && player.time() > 0) ink.setReplayTime(player.time());
-    if (page) {
-      try { renderTask?.cancel(); } catch { /* 무시 */ }
-      renderTask = page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: scale * dpr }) });
-      try { await renderTask.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') console.error(e); }
-    }
+  function goPage(n, { fromPlayback = false } = {}) {
+    n = Math.min(Math.max(1, n), pageCount());
+    pv.scrollToPage(n, !fromPlayback || Math.abs(n - state.page) <= 2);
   }
 
   async function loadPdf() {
@@ -257,7 +236,9 @@ export async function openLecture(root, id) {
     await putLecture(lec);
     state.page = 1;
     await loadPdf();
-    renderToolbar(); updateNav(); renderPage();
+    await pv.build();
+    pv.scrollToPage(1, false);
+    renderToolbar(); updateNav();
   }
 
   // ---------- 녹음 ----------
@@ -286,7 +267,7 @@ export async function openLecture(root, id) {
     waveCtx.clearRect(0, 0, W, H);
     waveCtx.lineWidth = 3;
     waveCtx.lineJoin = 'round';
-    waveCtx.strokeStyle = v < 0.005 ? '#bbbbbb' : '#13a05f';
+    waveCtx.strokeStyle = v < 0.005 ? '#3a4252' : '#6aa1ff';
     waveCtx.beginPath();
     const n = buf?.length || 0;
     const gain = 3; // 작은 소리도 잘 보이게
@@ -301,7 +282,7 @@ export async function openLecture(root, id) {
   function renderRecArea() {
     if (rec.state === 'rec' || rec.state === 'paused') {
       recArea.replaceChildren(
-        h('span', { class: `rec-dot ${rec.state === 'rec' ? 'on' : ''}` }), timerEl, waveC,
+        h('span', { class: `rec-dot ${rec.state === 'rec' ? 'on' : ''}` }, art('paw')), timerEl, waveC,
         rec.state === 'rec'
           ? h('button', { class: 'btn', onClick: pauseRec }, '일시정지')
           : h('button', { class: 'btn', onClick: resumeRec }, '계속'),
@@ -312,9 +293,9 @@ export async function openLecture(root, id) {
         h('label', { class: 'toggle' },
           h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; onPlayback(player.time()); } }), ' 재생 따라가기'),
         h('button', { class: 'btn', onClick: exportAudio }, '내보내기'),
-        h('button', { class: 'btn rec', onClick: startRec }, '● 이어서 녹음'));
+        h('button', { class: 'btn rec', onClick: startRec }, art('paw'), '이어서 녹음'));
     } else {
-      recArea.replaceChildren(h('button', { class: 'btn rec', onClick: startRec }, '● 녹음 시작'));
+      recArea.replaceChildren(h('button', { class: 'btn rec', onClick: startRec }, art('paw'), '녹음 시작'));
     }
   }
 
@@ -386,7 +367,7 @@ export async function openLecture(root, id) {
   }
 
   function onPlayback(t) {
-    ink.setReplayTime(state.follow && player && (t > 0 || !player.paused) ? t : null);
+    pv.setReplayTime(state.follow && player && (t > 0 || !player.paused) ? t : null);
     if (state.follow && lec.events.length) {
       let p = null;
       for (const ev of lec.events) { if (ev.t <= t) p = ev.page; else break; }
@@ -434,7 +415,7 @@ export async function openLecture(root, id) {
           h('button', { class: 'chip ghost', 'aria-label': '삭제', onClick: () => { lec.notes = lec.notes.filter((x) => x.id !== n.id); save(); renderNotes(); } }, '×')),
         body);
     }));
-    if (!lec.notes.length) notesList.append(h('li', { class: 'empty' }, '슬라이드를 보면서 떠오르는 걸 타이핑하세요. 녹음 중이면 그 시각이 같이 저장돼요.'));
+    if (!lec.notes.length) notesList.append(h('li', { class: 'empty' }, art('dog'), '슬라이드를 보면서 떠오르는 걸 타이핑하세요. 녹음 중이면 그 시각이 같이 저장돼요.'));
   }
 
   // ---------- 전사 ----------
@@ -450,7 +431,7 @@ export async function openLecture(root, id) {
   function renderTranscript() {
     txList.replaceChildren(...lec.transcript.map(txLine), interimLi);
     if (!lec.transcript.length && rec.state === 'idle') {
-      txList.prepend(h('li', { class: 'empty' }, '녹음을 시작하면 교수님 말씀이 여기에 자막으로 쌓여요.'));
+      txList.prepend(h('li', { class: 'empty' }, art('cat'), '녹음을 시작하면 교수님 말씀이 여기에 자막으로 쌓여요.'));
     }
   }
 
@@ -486,8 +467,6 @@ export async function openLecture(root, id) {
   };
   document.addEventListener('visibilitychange', onVis);
 
-  const ro = new ResizeObserver(debounce(() => renderPage(), 120));
-  ro.observe(stage);
 
   // ---------- 시작 ----------
   lec.ink ||= {}; lec.notes ||= []; lec.transcript ||= []; lec.events ||= [];
@@ -500,10 +479,14 @@ export async function openLecture(root, id) {
   if (lec.hasPdf) await loadPdf();
   await loadPlayer();
   renderToolbar(); renderRecArea(); renderNotes(); renderTranscript(); updateNav();
-  requestAnimationFrame(() => renderPage());
+  const startPage = lec.lastPage || 1;
+  await pv.build();
+  pv.scrollToPage(startPage, false);
+  requestAnimationFrame(() => pv.scrollToPage(startPage, false));
 
   return async () => {
-    ro.disconnect();
+    pv.destroy();
+    clearTimeout(pageEventTimer);
     document.removeEventListener('visibilitychange', onVis);
     if (rec.state !== 'idle') await finishRecording();
     await save.flush();

@@ -1,5 +1,5 @@
 // 화면에 보이는 앱 버전 (아이패드가 최신 버전을 쓰는지 확인용)
-export const APP_VERSION = '0.8';
+export const APP_VERSION = '0.9';
 
 // 작은 DOM/시간 도우미 함수 모음
 
@@ -44,8 +44,11 @@ export function debounce(fn, ms) {
   return wrapped;
 }
 
+const PAW = '<svg viewBox="0 0 24 24" fill="currentColor"><ellipse cx="12" cy="16.2" rx="5.2" ry="4.4"/><ellipse cx="5.2" cy="10.6" rx="2.2" ry="2.7"/><ellipse cx="9.4" cy="6.6" rx="2.2" ry="2.8"/><ellipse cx="14.6" cy="6.6" rx="2.2" ry="2.8"/><ellipse cx="18.8" cy="10.6" rx="2.2" ry="2.7"/></svg>';
 export function toast(msg, ms = 2500) {
-  const el = h('div', { class: 'toast' }, msg);
+  const paw = h('span', { class: 'art art-paw' });
+  paw.innerHTML = PAW;
+  const el = h('div', { class: 'toast' }, paw, msg);
   document.body.append(el);
   setTimeout(() => el.remove(), ms);
 }

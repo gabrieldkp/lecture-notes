@@ -2,6 +2,7 @@
 import { $, h, fmtDate, fmtTime, uid, toast, APP_VERSION } from './util.js';
 import { listLectures, putLecture, deleteLecture, requestPersist } from './db.js';
 import { openLecture } from './lecture.js';
+import { art } from './art.js';
 
 const app = $('#app');
 let cleanup = null;
@@ -39,14 +40,19 @@ async function renderList() {
 
   app.replaceChildren(
     h('div', { class: 'list-page' },
-      h('header', { class: 'list-header' }, h('h1', {}, '강의노트'), h('span', { class: 'version' }, `v${APP_VERSION}`)),
-      h('div', { class: 'new-row' }, input, h('button', { class: 'btn primary', onClick: create }, '+ 새 강의')),
+      h('header', { class: 'hero' },
+        h('div', { class: 'hero-pets' }, art('cat'), art('dog')),
+        h('div', {},
+          h('h1', {}, '강의노트', h('span', { class: 'version' }, `v${APP_VERSION}`)),
+          h('p', {}, '까망이랑 콩이랑 같이 수업 듣기'))),
+      h('div', { class: 'new-row' }, input, h('button', { class: 'btn primary', onClick: create }, art('paw'), '새 강의')),
       !standalone && h('p', { class: 'hint' },
         '팁: Safari 공유 버튼 → "홈 화면에 추가"로 설치하면 앱처럼 열리고, 저장한 노트가 지워질 위험도 줄어요.'),
       lectures.length === 0
-        ? h('p', { class: 'empty' }, '아직 강의가 없어요. 위에서 새 강의를 만들어 보세요.')
-        : h('ul', { class: 'lecture-list' }, lectures.map((l) =>
+        ? h('p', { class: 'empty' }, art('cat'), '아직 강의가 없어요. 위에서 새 강의를 만들어 보세요.')
+        : h('ul', { class: 'lecture-list' }, lectures.map((l, i) =>
           h('li', { class: 'lecture-card', onClick: () => { location.hash = `#/l/${l.id}`; } },
+            h('div', { class: 'avatar' }, art(i % 2 ? 'dog' : 'cat')),
             h('div', { class: 'card-main' },
               h('div', { class: 'card-title' }, l.title),
               h('div', { class: 'card-meta' },
