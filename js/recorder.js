@@ -16,6 +16,8 @@ export class Recorder {
   }
 
   async start() {
+    // 아이패드 Safari: 녹음용 오디오 모드로 전환 (자막 인식과 녹음이 같이 마이크를 쓰도록)
+    try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch { /* 무시 */ }
     // 아이패드는 버튼을 누른 그 순간에 만들어야 오디오 측정이 켜짐
     try { const AC = window.AudioContext || window.webkitAudioContext; this.ac = new AC(); } catch { this.ac = null; }
     // 아이패드에서 세부 옵션을 주면 무음으로 녹음되는 경우가 있어 기본 설정 사용
@@ -97,6 +99,8 @@ export class Recorder {
     this.#stopMeter();
     this.wakeLock?.release?.().catch(() => {});
     this.state = 'idle';
+    // 녹음이 끝나면 재생용 오디오 모드로 되돌림 (안 그러면 재생 소리가 안 나는 경우가 있음)
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* 무시 */ }
     return t;
   }
 

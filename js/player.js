@@ -49,6 +49,13 @@ export class SegPlayer {
     return true;
   }
 
+  // 아이패드 Safari: 녹음/자막 뒤에 오디오가 '녹음 모드'에 남아 소리가 안 나는 것 방지
+  #playMode() {
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch { /* 무시 */ }
+  }
+
+  #play() { this.#playMode(); this.audio.play().catch(() => {}); }
+
   seek(t, play = true) {
     if (!this.segs.length || t == null) return;
     let i = this.segs.findIndex((s) => t < s.start + s.duration);
@@ -56,12 +63,12 @@ export class SegPlayer {
     const off = Math.max(0, t - this.segs[i].start);
     if (this.#load(i)) this.pendingSeek = off;
     else { try { this.audio.currentTime = off; } catch { this.pendingSeek = off; } }
-    if (play) this.audio.play().catch(() => {});
+    if (play) this.#play();
     this.#tick(t);
   }
 
   toggle() {
-    if (this.audio.paused) this.audio.play().catch(() => {});
+    if (this.audio.paused) this.#play();
     else this.audio.pause();
   }
 
@@ -70,7 +77,7 @@ export class SegPlayer {
   #next() {
     if (this.i + 1 < this.segs.length) {
       this.#load(this.i + 1);
-      this.audio.play().catch(() => {});
+      this.#play();
     } else this.#ui();
   }
 
