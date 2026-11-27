@@ -42,12 +42,30 @@ export async function openLecture(root, id) {
       const key = `${lec.id}:seg:${uid()}`;
       await putFile(key, blob);
       lec.segments.push({ key, start: base + start, duration });
+      checkSilent(blob);
       lec.hasAudio = true;
       lec.duration = totalDuration();
       await save.flush();
     },
     onLevel: (v, buf) => onLevel(v, buf),
   });
+  // 저장된 녹음 구간이 실제로 소리가 있는지 검사 (무음이면 바로 알려줌)
+  let warnedSilent = false;
+  async function checkSilent(blob) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC();
+      const buf = await ac.decodeAudioData(await blob.arrayBuffer());
+      ac.close?.();
+      const d = buf.getChannelData(0);
+      let peak = 0;
+      for (let i = 0; i < d.length; i += 16) peak = Math.max(peak, Math.abs(d[i]));
+      if (peak < 0.002 && !warnedSilent) {
+        warnedSilent = true;
+        toast(`방금 저장된 녹음이 무음이에요${state.liveTx ? ' (실시간 자막이 켜져 있었어요)' : ''}. 녹음을 끝내고 다시 시작해 주세요.`, 7000);
+      }
+    } catch { /* 검사 실패는 무시 */ }
+  }
   const totalDuration = () => { const l = lec.segments.at(-1); return l ? l.start + l.duration : 0; };
   const tx = new Transcriber({
     now: () => base + rec.elapsed(),
