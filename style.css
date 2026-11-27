@@ -62,10 +62,14 @@ button { font: inherit; color: inherit; }
 .lec-title { max-width: 360px; border-color: transparent; font-weight: 600; font-size: 17px; }
 .lec-title:focus { border-color: var(--line); }
 .rec-area { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.rec-area audio { height: 40px; max-width: 360px; }
 .rec-dot { width: 12px; height: 12px; border-radius: 50%; background: #bbb; }
 .rec-dot.on { background: var(--danger); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
+.wave { width: 120px; height: 32px; background: #f1f5f2; border-radius: 6px; }
+.player { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.player .play { width: 44px; padding: 8px 0; }
+.player .seek { width: 220px; accent-color: var(--accent); }
+.time-label { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timer { font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 600; min-width: 64px; }
 
 .lec-main { flex: 1; display: flex; min-height: 0; }
@@ -127,5 +131,7 @@ button { font: inherit; color: inherit; }
   .panel { flex: 2; max-width: none; min-width: 0; }
   .lec-header { flex-wrap: wrap; }
   .rec-area { margin-left: 0; width: 100%; }
-  .rec-area audio { flex: 1; max-width: none; }
+  .rec-area { flex-wrap: wrap; }
+  .player { flex: 1; }
+  .player .seek { flex: 1; width: auto; }
 }

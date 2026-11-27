@@ -19,6 +19,7 @@ function newLecture(title) {
     notes: [],      // 타이핑 노트 [{id, t, page, text}]
     transcript: [], // 전사 [{t, text}]
     events: [],     // 슬라이드 넘김 [{t, page}]
+    segments: [],   // 녹음 구간 [{key, start, duration}]
     hasAudio: false,
     duration: 0,
   };

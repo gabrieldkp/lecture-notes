@@ -3,6 +3,15 @@ import { h, fmtTime, uid, debounce, toast } from './util.js';
 import { getLecture, putLecture, getFile, putFile } from './db.js';
 import { createInk } from './ink.js';
 import { Recorder, Transcriber } from './recorder.js';
+import { SegPlayer } from './player.js';
+
+// 아이패드에서는 실시간 자막이 마이크를 가져가 녹음이 무음이 되는 경우가 있어 기본으로 끔
+const IS_IPAD = /iPad|iPhone/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function liveTxDefault() {
+  const saved = localStorage.getItem('liveTx');
+  if (saved != null) return saved === '1' && Transcriber.supported();
+  return Transcriber.supported() && !IS_IPAD;
+}
 
 // PDF 뷰어(pdf.js 4.10.38)는 vendor 폴더에 함께 넣어 둬서 인터넷 없이도 동작
 const PDFJS = new URL('../vendor/pdfjs/pdf.min.mjs', import.meta.url).href;
@@ -24,27 +33,39 @@ export async function openLecture(root, id) {
   const lec = await getLecture(id);
   if (!lec) throw new Error('강의를 찾을 수 없어요');
 
-  const state = { page: lec.lastPage || 1, pdf: null, tool: 'pen', color: COLORS[0], finger: false, follow: true, tab: 'notes', liveTx: Transcriber.supported() };
+  const state = { page: lec.lastPage || 1, pdf: null, tool: 'pen', color: COLORS[0], finger: false, follow: true, tab: 'notes', liveTx: liveTxDefault() };
   const save = debounce(() => putLecture(lec), 400);
-  const rec = new Recorder();
+  let base = 0; // 이번 녹음 세션이 강의 타임라인에서 시작하는 위치 (이어서 녹음 시 앞 녹음 길이)
+  const rec = new Recorder({
+    onSegment: async ({ start, duration, blob }) => {
+      if (!blob.size) return;
+      const key = `${lec.id}:seg:${uid()}`;
+      await putFile(key, blob);
+      lec.segments.push({ key, start: base + start, duration });
+      lec.hasAudio = true;
+      lec.duration = totalDuration();
+      await save.flush();
+    },
+    onLevel: (v, buf) => onLevel(v, buf),
+  });
+  const totalDuration = () => { const l = lec.segments.at(-1); return l ? l.start + l.duration : 0; };
   const tx = new Transcriber({
-    now: () => rec.elapsed(),
+    now: () => base + rec.elapsed(),
     onFinal: (line) => { lec.transcript.push(line); save(); appendTranscriptLine(line); },
     onInterim: (text) => { interimLi.textContent = text; interimLi.hidden = !text; autoScroll(); },
     onError: (code) => {
-      state.liveTx = false;
-      liveToggle.querySelector('input').checked = false;
+      setLiveTx(false, false);
       toast(code === 'unstable'
         ? '실시간 자막이 계속 끊겨서 껐어요. 녹음은 그대로 계속돼요.'
         : '음성 인식 권한이 없어요. 녹음은 계속되고, 자막만 꺼졌어요.', 4000);
     },
   });
-  let audio = null, audioUrl = null, tick = null, partialTimer = null;
+  let player = null, tick = null, silentSince = null;
   let renderToken = 0, renderTask = null, activeTxIdx = -1;
 
   const now = () => {
-    if (rec.state !== 'idle') return rec.elapsed();
-    if (audio && audio.currentTime > 0) return audio.currentTime;
+    if (rec.state !== 'idle') return base + rec.elapsed();
+    if (player && player.time() > 0) return player.time();
     return null;
   };
   const pageCount = () => (state.pdf ? state.pdf.numPages : lec.blankPages || 1);
@@ -55,6 +76,9 @@ export async function openLecture(root, id) {
 
   const recArea = h('div', { class: 'rec-area' });
   const timerEl = h('span', { class: 'timer' }, '00:00');
+  // 녹음 중 마이크 소리를 물결로 보여주는 작은 캔버스
+  const waveC = h('canvas', { class: 'wave', width: 240, height: 64, title: '마이크 소리' });
+  const waveCtx = waveC.getContext('2d');
 
   const pdfC = h('canvas', { class: 'pdf-canvas' });
   const inkC = h('canvas', { class: 'ink-canvas' });
@@ -84,11 +108,12 @@ export async function openLecture(root, id) {
   const txList = h('ul', { class: 'transcript' });
   const interimLi = h('li', { class: 'interim', hidden: true });
   const liveToggle = h('label', { class: 'toggle' },
-    h('input', { type: 'checkbox', checked: state.liveTx, disabled: !Transcriber.supported(), onChange: (e) => { state.liveTx = e.target.checked; if (rec.state === 'rec') state.liveTx ? tx.start() : tx.stop(); } }),
+    h('input', { type: 'checkbox', checked: state.liveTx, disabled: !Transcriber.supported(), onChange: (e) => setLiveTx(e.target.checked, true) }),
     ' 실시간 자막');
   const txView = h('div', { class: 'panel-view' },
     h('div', { class: 'tx-head' }, liveToggle, h('button', { class: 'btn ghost', onClick: copyForSummary }, '요약용 전체 복사')),
     !Transcriber.supported() && h('p', { class: 'hint' }, '이 브라우저는 실시간 자막을 지원하지 않아요. 녹음은 그대로 돼요.'),
+    IS_IPAD && Transcriber.supported() && h('p', { class: 'hint' }, '아이패드에서 실시간 자막을 켜면 녹음이 무음이 될 수 있어요. 켰다면 녹음 중 위쪽 초록 물결이 움직이는지 꼭 확인하세요.'),
     txList);
 
   const tabBtns = { notes: h('button', { class: 'tab', onClick: () => setTab('notes') }, '노트'), tx: h('button', { class: 'tab', onClick: () => setTab('tx') }, '전사') };
@@ -113,7 +138,7 @@ export async function openLecture(root, id) {
     now,
     onChange: save,
     onSwipe: (d) => goPage(state.page + d),
-    onPick: (st) => { if (audio) seek(st.t); else toast('녹음을 끝낸 뒤에 필기를 눌러 그때 소리를 들을 수 있어요'); },
+    onPick: (st) => { if (player) seek(st.t); else toast('녹음을 끝낸 뒤에 필기를 눌러 그때 소리를 들을 수 있어요'); },
   });
 
   // ---------- 툴바 ----------
@@ -146,9 +171,9 @@ export async function openLecture(root, id) {
     if (n === state.page) return;
     state.page = n;
     lec.lastPage = n;
-    if (rec.state !== 'idle') lec.events.push({ t: rec.elapsed(), page: n });
+    if (rec.state !== 'idle') lec.events.push({ t: now(), page: n });
     // 재생 중에 직접 넘기면 "슬라이드 따라가기"를 끔
-    if (!fromPlayback && audio && !audio.paused && state.follow) { state.follow = false; renderRecArea(); }
+    if (!fromPlayback && player && !player.paused && state.follow) { state.follow = false; renderRecArea(); }
     save();
     renderPage();
     updateNav();
@@ -215,20 +240,58 @@ export async function openLecture(root, id) {
   }
 
   // ---------- 녹음 ----------
+  function setLiveTx(on, remember) {
+    state.liveTx = on;
+    liveToggle.querySelector('input').checked = on;
+    if (remember) localStorage.setItem('liveTx', on ? '1' : '0');
+    if (rec.state === 'rec') (on ? tx.start() : tx.stop());
+  }
+
+  function onLevel(v, buf) {
+    drawWave(v, buf);
+    // 자막을 켠 상태에서 마이크 소리가 8초 넘게 0이면: 자막이 마이크를 가져간 것으로 보고 자막을 끔
+    if (v < 0.005) {
+      silentSince ??= performance.now();
+      if (state.liveTx && performance.now() - silentSince > 8000) {
+        setLiveTx(false, true);
+        silentSince = null;
+        toast('마이크 소리가 안 들어와서 실시간 자막을 껐어요. 녹음을 우선해요.', 5000);
+      }
+    } else silentSince = null;
+  }
+
+  function drawWave(v, buf) {
+    const W = waveC.width, H = waveC.height;
+    waveCtx.clearRect(0, 0, W, H);
+    waveCtx.lineWidth = 3;
+    waveCtx.lineJoin = 'round';
+    waveCtx.strokeStyle = v < 0.005 ? '#bbbbbb' : '#13a05f';
+    waveCtx.beginPath();
+    const n = buf?.length || 0;
+    const gain = 3; // 작은 소리도 잘 보이게
+    for (let x = 0; x < W; x++) {
+      const sample = n ? buf[Math.floor((x / W) * n)] : 0;
+      const y = H / 2 + Math.max(-1, Math.min(1, sample * gain)) * (H / 2 - 3);
+      x ? waveCtx.lineTo(x, y) : waveCtx.moveTo(x, y);
+    }
+    waveCtx.stroke();
+  }
+
   function renderRecArea() {
     if (rec.state === 'rec' || rec.state === 'paused') {
       recArea.replaceChildren(
-        h('span', { class: `rec-dot ${rec.state === 'rec' ? 'on' : ''}` }), timerEl,
+        h('span', { class: `rec-dot ${rec.state === 'rec' ? 'on' : ''}` }), timerEl, waveC,
         rec.state === 'rec'
-          ? h('button', { class: 'btn', onClick: () => { rec.pause(); tx.stop(); renderRecArea(); } }, '일시정지')
-          : h('button', { class: 'btn', onClick: () => { rec.resume(); if (state.liveTx) tx.start(); renderRecArea(); } }, '계속'),
+          ? h('button', { class: 'btn', onClick: pauseRec }, '일시정지')
+          : h('button', { class: 'btn', onClick: resumeRec }, '계속'),
         h('button', { class: 'btn danger', onClick: stopRec }, '녹음 끝내기'),
       );
-    } else if (audio) {
-      recArea.replaceChildren(audio,
-        h('button', { class: 'btn', onClick: exportAudio }, '녹음 파일 내보내기'),
+    } else if (player) {
+      recArea.replaceChildren(player.el,
         h('label', { class: 'toggle' },
-          h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; } }), ' 슬라이드 따라가기'));
+          h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; } }), ' 슬라이드 따라가기'),
+        h('button', { class: 'btn', onClick: exportAudio }, '내보내기'),
+        h('button', { class: 'btn rec', onClick: startRec }, '● 이어서 녹음'));
     } else {
       recArea.replaceChildren(h('button', { class: 'btn rec', onClick: startRec }, '● 녹음 시작'));
     }
@@ -236,71 +299,72 @@ export async function openLecture(root, id) {
 
   async function startRec() {
     if (!window.MediaRecorder) { toast('이 브라우저는 녹음을 지원하지 않아요. Safari 최신 버전을 써 주세요.'); return; }
+    player?.pause();
+    base = totalDuration();
     try { await rec.start(); } catch (err) {
       console.error(err);
       toast('마이크를 쓸 수 없어요. 설정 → Safari → 마이크에서 허용해 주세요.', 4000);
       return;
     }
-    lec.events = [{ t: 0, page: state.page }];
-    lec.transcript = [];
-    txList.replaceChildren(interimLi);
+    if (base === 0) { lec.events = []; lec.transcript = []; renderTranscript(); }
+    lec.events.push({ t: base, page: state.page });
+    silentSince = null;
     if (state.liveTx) setTimeout(() => { if (rec.state === 'rec' && state.liveTx) tx.start(); }, 800);
-    tick = setInterval(() => { timerEl.textContent = fmtTime(rec.elapsed()); }, 500);
-    // 30초마다 녹음을 중간 저장 (앱이 꺼져도 대부분 남도록)
-    partialTimer = setInterval(async () => {
-      await putFile(`${lec.id}:audio`, rec.snapshot());
-      lec.partialAudio = true;
-      lec.duration = rec.elapsed();
-      save();
-    }, 30000);
+    const updateTimer = () => { timerEl.textContent = fmtTime(base + rec.elapsed()); };
+    updateTimer();
+    tick = setInterval(updateTimer, 500);
     renderRecArea();
   }
 
+  async function pauseRec() { tx.stop(); await rec.pause(); renderRecArea(); }
+  function resumeRec() { rec.resume(); if (state.liveTx) tx.start(); renderRecArea(); }
+
   async function finishRecording() {
-    clearInterval(tick); clearInterval(partialTimer);
+    clearInterval(tick);
     tx.stop();
-    const blob = await rec.stop();
-    await putFile(`${lec.id}:audio`, blob);
-    lec.hasAudio = true;
-    lec.partialAudio = false;
-    lec.duration = rec.duration;
+    await rec.stop();
+    lec.duration = totalDuration();
     await save.flush();
   }
 
   async function stopRec() {
     await finishRecording();
-    await loadAudio();
+    await loadPlayer();
     renderRecArea();
     toast('녹음을 저장했어요');
   }
 
-  async function loadAudio() {
-    const blob = await getFile(`${lec.id}:audio`);
-    if (!blob) return;
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    audioUrl = URL.createObjectURL(blob);
-    audio = h('audio', { controls: true, preload: 'metadata', src: audioUrl });
-    audio.addEventListener('timeupdate', onPlayback);
+  async function loadPlayer() {
+    player?.destroy();
+    player = null;
+    if (!lec.segments.length) return;
+    player = await SegPlayer.create(lec.segments, { onTime: onPlayback });
   }
 
   // 원본 녹음을 다른 앱(클로바노트 등)으로 보내 더 정확하게 다시 전사할 수 있게
   async function exportAudio() {
-    const blob = await getFile(`${lec.id}:audio`);
-    if (!blob) return;
-    const ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : 'webm';
-    const name = `${(lec.title || '강의').replace(/[\\/:*?"<>|]/g, '_')}.${ext}`;
-    const file = new File([blob], name, { type: blob.type || 'audio/mp4' });
-    if (navigator.canShare?.({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: name }); } catch { /* 취소 */ }
+    const files = [];
+    const safe = (lec.title || '강의').replace(/[\\/:*?"<>|]/g, '_');
+    for (const [i, seg] of lec.segments.entries()) {
+      const blob = await getFile(seg.key);
+      if (!blob) continue;
+      const ext = /mp4|m4a|aac/.test(blob.type) ? 'm4a' : 'webm';
+      const name = lec.segments.length > 1 ? `${safe}_${String(i + 1).padStart(2, '0')}.${ext}` : `${safe}.${ext}`;
+      files.push(new File([blob], name, { type: blob.type || 'audio/mp4' }));
+    }
+    if (!files.length) return;
+    if (navigator.canShare?.({ files })) {
+      try { await navigator.share({ files, title: safe }); } catch { /* 취소 */ }
       return;
     }
-    const a = h('a', { href: URL.createObjectURL(file), download: name });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    for (const file of files) {
+      const a = h('a', { href: URL.createObjectURL(file), download: file.name });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
   }
 
-  function onPlayback() {
-    const t = audio.currentTime;
+  function onPlayback(t) {
     if (state.follow && lec.events.length) {
       let p = null;
       for (const ev of lec.events) { if (ev.t <= t) p = ev.page; else break; }
@@ -317,7 +381,7 @@ export async function openLecture(root, id) {
   }
 
   function seek(t, page) {
-    if (audio && t != null) { audio.currentTime = t; audio.play().catch(() => {}); }
+    if (player && t != null) player.seek(t);
     if (page) goPage(page, { fromPlayback: true });
   }
 
@@ -412,13 +476,14 @@ export async function openLecture(root, id) {
 
   // ---------- 시작 ----------
   lec.ink ||= {}; lec.notes ||= []; lec.transcript ||= []; lec.events ||= [];
-  if (lec.partialAudio) {
-    // 지난번 녹음 도중 앱이 꺼졌던 경우: 중간 저장본을 살림
-    lec.hasAudio = true; lec.partialAudio = false; save();
-    toast('지난번에 끊긴 녹음을 중간 저장본으로 복구했어요', 4000);
+  if (!lec.segments) {
+    // 예전 버전(녹음 파일 1개)에서 옮겨오기
+    lec.segments = lec.hasAudio ? [{ key: `${lec.id}:audio`, start: 0, duration: lec.duration || 0 }] : [];
+    delete lec.partialAudio;
+    save();
   }
   if (lec.hasPdf) await loadPdf();
-  if (lec.hasAudio) await loadAudio();
+  await loadPlayer();
   renderToolbar(); renderRecArea(); renderNotes(); renderTranscript(); setTab('notes'); updateNav();
   requestAnimationFrame(() => renderPage());
 
@@ -427,7 +492,7 @@ export async function openLecture(root, id) {
     document.removeEventListener('visibilitychange', onVis);
     if (rec.state !== 'idle') await finishRecording();
     await save.flush();
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    player?.destroy();
     state.pdf?.destroy?.();
   };
 }

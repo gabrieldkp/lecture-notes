@@ -1,21 +1,33 @@
 // 녹음(MediaRecorder)과 실시간 한국어 전사(Web Speech API)
 
+// 녹음은 "구간(segment)" 단위로 저장합니다.
+// - 5분마다 새 구간으로 넘어가며 앞 구간을 완성된 파일로 저장 (앱이 꺼져도 최대 5분만 손실)
+// - 일시정지 = 구간 끝내기, 계속 = 새 구간 시작 (Safari의 pause 버그 회피)
+// - 다음 구간을 먼저 시작한 뒤 이전 구간을 끝내서 이음새에 빈틈이 없게
+const ROTATE_MS = 5 * 60 * 1000;
+
 export class Recorder {
-  constructor() { this.state = 'idle'; this.acc = 0; this.since = 0; this.chunks = []; }
+  constructor({ onSegment, onLevel } = {}) {
+    this.state = 'idle';
+    this.acc = 0;
+    this.since = 0;
+    this.onSegment = onSegment; // async ({start, duration, blob}) — start는 이번 녹음 세션 기준 초
+    this.onLevel = onLevel;     // (0~1 소리 크기, 파형 데이터)
+  }
 
   async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true },
-    });
+    // 아이패드는 버튼을 누른 그 순간에 만들어야 오디오 측정이 켜짐
+    try { const AC = window.AudioContext || window.webkitAudioContext; this.ac = new AC(); } catch { this.ac = null; }
+    // 아이패드에서 세부 옵션을 주면 무음으로 녹음되는 경우가 있어 기본 설정 사용
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const types = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
     this.mime = types.find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
-    this.mr = new MediaRecorder(this.stream, this.mime ? { mimeType: this.mime } : undefined);
-    this.chunks = [];
-    this.mr.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
-    this.mr.start(1000); // 1초마다 조각 저장 (중간 저장용)
     this.acc = 0;
     this.since = performance.now();
     this.state = 'rec';
+    this.#newSeg();
+    this.#armRotate();
+    this.#startMeter();
     await this.#lockScreen();
   }
 
@@ -23,41 +35,97 @@ export class Recorder {
     return this.acc + (this.state === 'rec' ? (performance.now() - this.since) / 1000 : 0);
   }
 
-  pause() {
+  #armRotate() {
+    clearInterval(this.rotateTimer);
+    this.rotateTimer = setInterval(() => this.#rotate(), window.__ROTATE_MS || ROTATE_MS);
+  }
+
+  #newSeg() {
+    const mr = new MediaRecorder(this.stream, this.mime ? { mimeType: this.mime } : undefined);
+    const seg = { mr, start: this.elapsed(), chunks: [] };
+    mr.ondataavailable = (e) => { if (e.data && e.data.size) seg.chunks.push(e.data); };
+    mr.start();
+    this.cur = seg;
+  }
+
+  #finish(seg, endT) {
+    return new Promise((resolve) => {
+      seg.mr.onstop = () => resolve({
+        start: seg.start,
+        duration: Math.max(0, endT - seg.start),
+        blob: new Blob(seg.chunks, { type: seg.mr.mimeType || this.mime || 'audio/mp4' }),
+      });
+      try { seg.mr.stop(); } catch { resolve({ start: seg.start, duration: 0, blob: new Blob([]) }); }
+    });
+  }
+
+  async #rotate() {
+    if (this.state !== 'rec') return;
+    const old = this.cur;
+    const t = this.elapsed();
+    this.#newSeg();
+    this.cur.start = t;
+    await this.onSegment?.(await this.#finish(old, t));
+  }
+
+  async pause() {
     if (this.state !== 'rec') return;
     this.acc = this.elapsed();
     this.state = 'paused';
-    this.mr.pause();
+    clearInterval(this.rotateTimer);
+    const seg = this.cur;
+    this.cur = null;
+    await this.onSegment?.(await this.#finish(seg, this.acc));
   }
 
   resume() {
     if (this.state !== 'paused') return;
     this.since = performance.now();
     this.state = 'rec';
-    this.mr.resume();
+    this.#newSeg();
+    this.#armRotate();
   }
 
-  // 지금까지 녹음된 부분 (앱이 갑자기 꺼져도 남도록 주기적으로 저장)
-  snapshot() { return new Blob(this.chunks, { type: this.mr?.mimeType || this.mime || 'audio/mp4' }); }
-
-  stop() {
-    return new Promise((resolve) => {
-      this.duration = this.elapsed();
-      this.state = 'idle';
-      this.mr.onstop = () => {
-        this.stream.getTracks().forEach((t) => t.stop());
-        this.wakeLock?.release?.().catch(() => {});
-        resolve(this.snapshot());
-      };
-      this.mr.stop();
-    });
+  async stop() {
+    const t = this.elapsed();
+    const wasRec = this.state === 'rec';
+    this.acc = t;
+    this.state = 'stopping';
+    clearInterval(this.rotateTimer);
+    if (wasRec && this.cur) { const seg = this.cur; this.cur = null; await this.onSegment?.(await this.#finish(seg, t)); }
+    this.stream?.getTracks().forEach((tr) => tr.stop());
+    this.#stopMeter();
+    this.wakeLock?.release?.().catch(() => {});
+    this.state = 'idle';
+    return t;
   }
+
+  // 마이크 소리 크기 측정 (녹음이 실제로 되고 있는지 화면에 보여주기 위함)
+  #startMeter() {
+    try {
+      if (!this.ac) return;
+      const src = this.ac.createMediaStreamSource(this.stream);
+      const an = this.ac.createAnalyser();
+      an.fftSize = 1024;
+      src.connect(an);
+      const buf = new Float32Array(an.fftSize);
+      this.meterTimer = setInterval(() => {
+        if (this.ac.state === 'suspended') this.ac.resume().catch(() => {});
+        an.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (const v of buf) sum += v * v;
+        const rms = Math.sqrt(sum / buf.length);
+        this.onLevel?.(Math.min(1, rms * 8), buf);
+      }, 60);
+    } catch { /* 측정 못 해도 녹음은 계속 */ }
+  }
+  #stopMeter() { clearInterval(this.meterTimer); this.ac?.close?.().catch(() => {}); this.ac = null; }
 
   // 녹음 중 화면이 꺼지지 않게 (꺼지면 Safari가 녹음을 멈출 수 있음)
   async #lockScreen() {
     try { this.wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* 지원 안 하면 무시 */ }
   }
-  async relock() { if (this.state !== 'idle') await this.#lockScreen(); }
+  async relock() { if (this.state === 'rec' || this.state === 'paused') await this.#lockScreen(); }
 }
 
 export class Transcriber {

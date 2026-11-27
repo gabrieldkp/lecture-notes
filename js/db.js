@@ -38,6 +38,8 @@ export const putFile = (key, blob) => tx('files', 'readwrite', (s) => s.put(blob
 export const delFile = (key) => tx('files', 'readwrite', (s) => s.delete(key));
 
 export async function deleteLecture(id) {
+  const lec = await getLecture(id);
+  for (const seg of lec?.segments || []) await delFile(seg.key);
   await tx('lectures', 'readwrite', (s) => s.delete(id));
   await delFile(`${id}:pdf`);
   await delFile(`${id}:audio`);
