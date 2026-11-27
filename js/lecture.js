@@ -39,7 +39,7 @@ export async function openLecture(root, id) {
   let base = 0; // 이번 녹음 세션이 강의 타임라인에서 시작하는 위치 (이어서 녹음 시 앞 녹음 길이)
   const rec = new Recorder({
     onSegment: async ({ start, duration, blob }) => {
-      if (!blob.size) return;
+      if (!blob.size) { toast('방금 녹음 구간이 비어 있어요. 녹음을 끝내고 다시 시작해 주세요.', 6000); return; }
       const key = `${lec.id}:seg:${uid()}`;
       await putFile(key, blob);
       lec.segments.push({ key, start: base + start, duration });
@@ -51,7 +51,7 @@ export async function openLecture(root, id) {
     onLevel: (v, buf) => onLevel(v, buf),
   });
   // 저장된 녹음 구간이 실제로 소리가 있는지 검사 (무음이면 바로 알려줌)
-  let warnedSilent = false;
+  let warnedSilent = false, warnedNoMic = false;
   async function checkSilent(blob) {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -254,6 +254,10 @@ export async function openLecture(root, id) {
     // 자막을 켠 상태에서 마이크 소리가 8초 넘게 0이면: 자막이 마이크를 가져간 것으로 보고 자막을 끔
     if (v < 0.005) {
       silentSince ??= performance.now();
+      if (!state.liveTx && !warnedNoMic && performance.now() - silentSince > 10000) {
+        warnedNoMic = true;
+        toast('마이크 소리가 10초 넘게 안 들어와요. 녹음을 끝내고 다시 시작해 보세요.', 6000);
+      }
       if (state.liveTx && performance.now() - silentSince > 8000) {
         setLiveTx(false, true);
         silentSince = null;
@@ -301,16 +305,22 @@ export async function openLecture(root, id) {
 
   async function startRec() {
     if (!window.MediaRecorder) { toast('이 브라우저는 녹음을 지원하지 않아요. Safari 최신 버전을 써 주세요.'); return; }
-    player?.pause();
+    // 아이패드: 재생기가 오디오를 잡고 있으면 새 녹음이 무음이 될 수 있어 완전히 해제
+    player?.destroy();
+    player = null;
     base = totalDuration();
     try { await rec.start(); } catch (err) {
       console.error(err);
       toast('마이크를 쓸 수 없어요. 설정 → Safari → 마이크에서 허용해 주세요.', 4000);
+      await loadPlayer();
+      renderRecArea();
       return;
     }
     if (base === 0) { lec.events = []; lec.transcript = []; renderTranscript(); }
     lec.events.push({ t: base, page: state.page });
     silentSince = null;
+    warnedNoMic = false;
+    warnedSilent = false;
     if (state.liveTx) setTimeout(() => { if (rec.state === 'rec' && state.liveTx) tx.start(); }, 800);
     const updateTimer = () => { timerEl.textContent = fmtTime(base + rec.elapsed()); };
     updateTimer();
