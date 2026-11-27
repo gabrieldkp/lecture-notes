@@ -173,7 +173,7 @@ export async function openLecture(root, id) {
     lec.lastPage = n;
     if (rec.state !== 'idle') lec.events.push({ t: now(), page: n });
     // 재생 중에 직접 넘기면 "슬라이드 따라가기"를 끔
-    if (!fromPlayback && player && !player.paused && state.follow) { state.follow = false; renderRecArea(); }
+    if (!fromPlayback && player && !player.paused && state.follow) { state.follow = false; ink.setReplayTime(null); renderRecArea(); }
     save();
     renderPage();
     updateNav();
@@ -202,6 +202,7 @@ export async function openLecture(root, id) {
     ctx.fillRect(0, 0, pdfC.width, pdfC.height);
     lec.ink[state.page] ||= [];
     ink.setStrokes(lec.ink[state.page]);
+    if (player && state.follow && player.time() > 0) ink.setReplayTime(player.time());
     if (page) {
       try { renderTask?.cancel(); } catch { /* 무시 */ }
       renderTask = page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: scale * dpr }) });
@@ -289,7 +290,7 @@ export async function openLecture(root, id) {
     } else if (player) {
       recArea.replaceChildren(player.el,
         h('label', { class: 'toggle' },
-          h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; } }), ' 슬라이드 따라가기'),
+          h('input', { type: 'checkbox', checked: state.follow, onChange: (e) => { state.follow = e.target.checked; onPlayback(player.time()); } }), ' 재생 따라가기'),
         h('button', { class: 'btn', onClick: exportAudio }, '내보내기'),
         h('button', { class: 'btn rec', onClick: startRec }, '● 이어서 녹음'));
     } else {
@@ -365,6 +366,7 @@ export async function openLecture(root, id) {
   }
 
   function onPlayback(t) {
+    ink.setReplayTime(state.follow && player && (t > 0 || !player.paused) ? t : null);
     if (state.follow && lec.events.length) {
       let p = null;
       for (const ev of lec.events) { if (ev.t <= t) p = ev.page; else break; }

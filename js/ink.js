@@ -11,6 +11,8 @@ export function createInk(canvas, opts) {
   let strokes = [];
   let cur = null;
   let swipe = null;
+  let replayT = null; // 재생 위치(초). 이 시각 이후에 그린 획은 흐리게 표시
+  const later = (st) => replayT != null && st.t != null && st.t > replayT;
 
   const W = () => canvas.width;
   const H = () => canvas.height;
@@ -24,7 +26,7 @@ export function createInk(canvas, opts) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = st.color;
-    ctx.globalAlpha = st.tool === 'hl' ? 0.3 : 1;
+    ctx.globalAlpha = (st.tool === 'hl' ? 0.3 : 1) * (later(st) ? 0.12 : 1);
   }
 
   function lineWidth(st, p) {
@@ -129,6 +131,13 @@ export function createInk(canvas, opts) {
   return {
     setStrokes(arr) { strokes = arr; redraw(); },
     redraw,
+    // 재생 위치에 맞춰 필기 보여주기 (null이면 전부 보통으로)
+    setReplayTime(t) {
+      const visible = (x) => strokes.filter((st) => !(x != null && st.t != null && st.t > x)).length;
+      const changed = (t == null) !== (replayT == null) || visible(t) !== visible(replayT);
+      replayT = t;
+      if (changed) redraw();
+    },
     undo() { if (strokes.length) { strokes.pop(); redraw(); opts.onChange(); } },
   };
 }
