@@ -81,6 +81,10 @@ async function route() {
   }
 }
 
+// 아이패드에서 오류가 나면 화면에 보여줘서 원인을 알 수 있게
+window.addEventListener('error', (e) => toast('오류: ' + (e.message || e.error), 6000));
+window.addEventListener('unhandledrejection', (e) => toast('오류: ' + (e.reason?.message || e.reason), 6000));
+
 window.addEventListener('hashchange', route);
 requestPersist();
 route();

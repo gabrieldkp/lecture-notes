@@ -31,7 +31,13 @@ export async function openLecture(root, id) {
     now: () => rec.elapsed(),
     onFinal: (line) => { lec.transcript.push(line); save(); appendTranscriptLine(line); },
     onInterim: (text) => { interimLi.textContent = text; interimLi.hidden = !text; autoScroll(); },
-    onError: () => toast('음성 인식 권한이 없어요. 녹음은 계속되고, 자막만 꺼졌어요.'),
+    onError: (code) => {
+      state.liveTx = false;
+      liveToggle.querySelector('input').checked = false;
+      toast(code === 'unstable'
+        ? '실시간 자막이 계속 끊겨서 껐어요. 녹음은 그대로 계속돼요.'
+        : '음성 인식 권한이 없어요. 녹음은 계속되고, 자막만 꺼졌어요.', 4000);
+    },
   });
   let audio = null, audioUrl = null, tick = null, partialTimer = null;
   let renderToken = 0, renderTask = null, activeTxIdx = -1;
@@ -238,7 +244,7 @@ export async function openLecture(root, id) {
     lec.events = [{ t: 0, page: state.page }];
     lec.transcript = [];
     txList.replaceChildren(interimLi);
-    if (state.liveTx) tx.start();
+    if (state.liveTx) setTimeout(() => { if (rec.state === 'rec' && state.liveTx) tx.start(); }, 800);
     tick = setInterval(() => { timerEl.textContent = fmtTime(rec.elapsed()); }, 500);
     // 30초마다 녹음을 중간 저장 (앱이 꺼져도 대부분 남도록)
     partialTimer = setInterval(async () => {

@@ -68,7 +68,12 @@ export class Transcriber {
     this.on = false;
   }
 
-  start() { if (!Transcriber.supported()) return; this.on = true; this.#spawn(); }
+  start() {
+    if (!Transcriber.supported()) return;
+    this.on = true;
+    this.quickEnds = 0;
+    this.#spawn();
+  }
 
   stop() { this.on = false; try { this.r?.stop(); } catch { /* 무시 */ } this.onInterim(''); }
 
@@ -79,7 +84,11 @@ export class Transcriber {
     r.continuous = true;
     r.interimResults = true;
     let segT = null;
+    const startedAt = performance.now();
+    let gotResult = false;
     r.onresult = (e) => {
+      gotResult = true;
+      this.quickEnds = 0;
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
@@ -98,9 +107,15 @@ export class Transcriber {
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { this.on = false; this.onError?.(e.error); }
     };
     // 브라우저가 일정 시간 뒤 인식을 끊으면 자동으로 다시 시작
+    // 시작하자마자 계속 끊기면(아이패드에서 녹음과 동시에 못 쓰는 경우) 간격을 늘리다가 자막만 끔
     r.onend = () => {
       this.onInterim('');
-      if (this.on) setTimeout(() => this.on && this.#spawn(), 300);
+      if (!this.on) return;
+      const quick = !gotResult && performance.now() - startedAt < 2000;
+      this.quickEnds = quick ? this.quickEnds + 1 : 0;
+      if (this.quickEnds >= 4) { this.on = false; this.onError?.('unstable'); return; }
+      const delay = [300, 1000, 2500, 5000][this.quickEnds] ?? 5000;
+      setTimeout(() => this.on && this.#spawn(), delay);
     };
     try { r.start(); } catch { /* 이미 시작됨 */ }
     this.r = r;
